@@ -1,64 +1,87 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import json
+import sqlite3
 
 app = FastAPI()
 
-# Função para carregar os dados do arquivo JSON
-def carregar_dados():
-    with open("instituicoes.json", "r", encoding="utf-8") as file:
-        return json.load(file)
+DB_PATH = "instituicoes.db"
 
-# Função para salvar os dados no arquivo JSON
-def salvar_dados(dados):
-    with open("instituicoes.json", "w", encoding="utf-8") as file:
-        json.dump(dados, file, ensure_ascii=False, indent=2)
-
-# Modelo Pydantic para validação
-class Instituicao(BaseModel):
-    co_instituicao: int
-    no_instituicao: str
-    cidade: str
-    uf: str
-    dependencia_administrativa: str
-
-# Carrega os dados da instituição
-instituicoes_data = carregar_dados()
+def get_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row  # Para trazer como dicionário
+    return conn
 
 @app.get("/instituicoesensino")
 def listar_instituicoes():
-    return instituicoes_data
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM instituicoes")
+    instituicoes = [dict(row) for row in cursor.fetchall()]    #fetchall pega todos os dados da lista
+    conn.close()
+    return instituicoes
 
 @app.get("/instituicoesensino/{co_instituicao}")
 def recuperar_instituicao(co_instituicao: int):
-    instituicao = next((inst for inst in instituicoes_data if inst["co_instituicao"] == co_instituicao), None)
-    if instituicao is None:
-        raise HTTPException(status_code=404, detail="Instituição não encontrada")
-    return instituicao
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM instituicoes WHERE co_instituicao = ?", (co_instituicao,))
+    instituicao = cursor.fetchone()    #pega apenas um regístro da lista
+    conn.close()
+    if instituicao:
+        return dict(instituicao)
+    raise HTTPException(status_code=404, detail="Instituição não encontrada")
 
 @app.post("/instituicoesensino")
-def inserir_instituicao(nova_instituicao: Instituicao):
-    for inst in instituicoes_data:
-        if inst["co_instituicao"] == nova_instituicao.co_instituicao:
-            raise HTTPException(status_code=400, detail="Instituição já existe")
-    instituicoes_data.append(nova_instituicao.dict())
-    salvar_dados(instituicoes_data)
+def inserir_instituicao(nova_instituicao: dict):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO instituicoes (co_instituicao, no_instituicao, cidade, uf, dependencia_administrativa)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            nova_instituicao["co_instituicao"],
+            nova_instituicao["no_instituicao"],
+            nova_instituicao["cidade"],
+            nova_instituicao["uf"],
+            nova_instituicao["dependencia_administrativa"]
+        ))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Instituição já existe")
+    finally:
+        conn.close()
     return {"mensagem": "Instituição adicionada com sucesso"}
 
 @app.put("/instituicoesensino")
-def atualizar_instituicao(inst_atualizada: Instituicao):
-    for i, inst in enumerate(instituicoes_data):
-        if inst["co_instituicao"] == inst_atualizada.co_instituicao:
-            instituicoes_data[i] = inst_atualizada.dict()
-            salvar_dados(instituicoes_data)
-            return {"mensagem": "Instituição atualizada com sucesso"}
-    raise HTTPException(status_code=404, detail="Instituição não encontrada")
+def atualizar_instituicao(inst_atualizada: dict):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE instituicoes
+        SET no_instituicao = ?, cidade = ?, uf = ?, dependencia_administrativa = ?
+        WHERE co_instituicao = ?
+    """, (
+        inst_atualizada["no_instituicao"],
+        inst_atualizada["cidade"],
+        inst_atualizada["uf"],
+        inst_atualizada["dependencia_administrativa"],
+        inst_atualizada["co_instituicao"]
+    ))
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Instituição não encontrada")
+    conn.commit()
+    conn.close()
+    return {"mensagem": "Instituição atualizada com sucesso"}
 
 @app.delete("/instituicoesensino/{co_instituicao}")
 def remover_instituicao(co_instituicao: int):
-    for i, inst in enumerate(instituicoes_data):
-        if inst["co_instituicao"] == co_instituicao:
-            instituicoes_data.pop(i)
-            salvar_dados(instituicoes_data)
-            return {"mensagem": "Instituição removida com sucesso"}
-    raise HTTPException(status_code=404, detail="Instituição não encontrada")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM instituicoes WHERE co_instituicao = ?", (co_instituicao,))
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Instituição não encontrada")
+    conn.commit()
+    conn.close()
+    return {"mensagem": "Instituição removida com sucesso"}
