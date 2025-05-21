@@ -1,16 +1,11 @@
-from fastapi import FastAPI, HTTPException
-import sqlite3
+# ~/Downloads/pweb2/main.py
+from fastapi import HTTPException
 from marshmallow import Schema, fields, validates, ValidationError, validate
+from app_config import create_app
+from database import execute_query
+import sqlite3
 
-app = FastAPI()
-
-DB_PATH = "instituicoes.db"
-
-# Função auxiliar para conexão com o banco
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+app = create_app()
 
 # Schema Marshmallow para validação
 class InstituicaoSchema(Schema):
@@ -27,52 +22,48 @@ class InstituicaoSchema(Schema):
 
     @validates("id_estado")
     def validate_id_estado(self, value):
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id_estado FROM estados WHERE id_estado = ?", (value,))
-        if not cursor.fetchone():
-            conn.close()
+        result = execute_query(
+            "SELECT id_estado FROM estados WHERE id_estado = ?",
+            (value,),
+            fetch_one=True
+        )
+        if not result:
             raise ValidationError("ID de estado inválido.")
-        conn.close()
 
     @validates("id_municipio")
     def validate_id_municipio(self, value):
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id_municipio FROM municipios WHERE id_municipio = ? AND id_estado = ?", 
-                      (value, self.context.get("id_estado")))
-        if not cursor.fetchone():
-            conn.close()
+        result = execute_query(
+            "SELECT id_municipio FROM municipios WHERE id_municipio = ? AND id_estado = ?",
+            (value, self.context.get("id_estado")),
+            fetch_one=True
+        )
+        if not result:
             raise ValidationError("ID de município inválido ou não pertence ao estado informado.")
-        conn.close()
 
     @validates("id_mesorregiao")
     def validate_id_mesorregiao(self, value):
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id_mesorregiao FROM mesorregioes WHERE id_mesorregiao = ? AND id_estado = ?", 
-                      (value, self.context.get("id_estado")))
-        if not cursor.fetchone():
-            conn.close()
+        result = execute_query(
+            "SELECT id_mesorregiao FROM mesorregioes WHERE id_mesorregiao = ? AND id_estado = ?",
+            (value, self.context.get("id_estado")),
+            fetch_one=True
+        )
+        if not result:
             raise ValidationError("ID de mesorregião inválido ou não pertence ao estado informado.")
-        conn.close()
 
     @validates("id_microrregiao")
     def validate_id_microrregiao(self, value):
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id_microrregiao FROM microrregioes WHERE id_microrregiao = ? AND id_mesorregiao = ?", 
-                      (value, self.context.get("id_mesorregiao")))
-        if not cursor.fetchone():
-            conn.close()
+        result = execute_query(
+            "SELECT id_microrregiao FROM microrregioes WHERE id_microrregiao = ? AND id_mesorregiao = ?",
+            (value, self.context.get("id_mesorregiao")),
+            fetch_one=True
+        )
+        if not result:
             raise ValidationError("ID de microrregião inválido ou não pertence à mesorregião informada.")
-        conn.close()
 
 @app.get("/instituicoesensino")
 def listar_instituicoes():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    results = execute_query(
+        """
         SELECT i.co_instituicao, i.no_instituicao, m.nome as cidade, e.sigla as uf, 
                mes.nome as mesorregiao, mic.nome as microrregiao, i.dependencia_administrativa
         FROM instituicoes i
@@ -80,16 +71,15 @@ def listar_instituicoes():
         JOIN estados e ON i.id_estado = e.id_estado
         JOIN mesorregioes mes ON i.id_mesorregiao = mes.id_mesorregiao
         JOIN microrregioes mic ON i.id_microrregiao = mic.id_microrregiao
-    """)
-    instituicoes = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return instituicoes
+        """,
+        fetch_all=True
+    )
+    return [dict(row) for row in results]
 
 @app.get("/instituicoesensino/{co_instituicao}")
 def recuperar_instituicao(co_instituicao: int):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    result = execute_query(
+        """
         SELECT i.co_instituicao, i.no_instituicao, m.nome as cidade, e.sigla as uf, 
                mes.nome as mesorregiao, mic.nome as microrregiao, i.dependencia_administrativa
         FROM instituicoes i
@@ -98,11 +88,12 @@ def recuperar_instituicao(co_instituicao: int):
         JOIN mesorregioes mes ON i.id_mesorregiao = mes.id_mesorregiao
         JOIN microrregioes mic ON i.id_microrregiao = mic.id_microrregiao
         WHERE i.co_instituicao = ?
-    """, (co_instituicao,))
-    instituicao = cursor.fetchone()
-    conn.close()
-    if instituicao:
-        return dict(instituicao)
+        """,
+        (co_instituicao,),
+        fetch_one=True
+    )
+    if result:
+        return dict(result)
     raise HTTPException(status_code=404, detail="Instituição não encontrada")
 
 @app.post("/instituicoesensino")
@@ -117,27 +108,24 @@ def inserir_instituicao(nova_instituicao: dict):
     except ValidationError as err:
         raise HTTPException(status_code=422, detail=err.messages)
 
-    conn = get_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
+        execute_query(
+            """
             INSERT INTO instituicoes (co_instituicao, no_instituicao, id_municipio, id_estado, id_mesorregiao, id_microrregiao, dependencia_administrativa)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            validated_data["co_instituicao"],
-            validated_data["no_instituicao"],
-            validated_data["id_municipio"],
-            validated_data["id_estado"],
-            validated_data["id_mesorregiao"],
-            validated_data["id_microrregiao"],
-            validated_data["dependencia_administrativa"]
-        ))
-        conn.commit()
+            """,
+            (
+                validated_data["co_instituicao"],
+                validated_data["no_instituicao"],
+                validated_data["id_municipio"],
+                validated_data["id_estado"],
+                validated_data["id_mesorregiao"],
+                validated_data["id_microrregiao"],
+                validated_data["dependencia_administrativa"]
+            )
+        )
     except sqlite3.IntegrityError:
-        conn.close()
         raise HTTPException(status_code=400, detail="Instituição já existe ou IDs inválidos")
-    finally:
-        conn.close()
     return {"mensagem": "Instituição adicionada com sucesso"}
 
 @app.put("/instituicoesensino")
@@ -152,81 +140,70 @@ def atualizar_instituicao(inst_atualizada: dict):
     except ValidationError as err:
         raise HTTPException(status_code=422, detail=err.messages)
 
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    rowcount = execute_query(
+        """
         UPDATE instituicoes
         SET no_instituicao = ?, id_municipio = ?, id_estado = ?, id_mesorregiao = ?, id_microrregiao = ?, dependencia_administrativa = ?
         WHERE co_instituicao = ?
-    """, (
-        validated_data["no_instituicao"],
-        validated_data["id_municipio"],
-        validated_data["id_estado"],
-        validated_data["id_mesorregiao"],
-        validated_data["id_microrregiao"],
-        validated_data["dependencia_administrativa"],
-        validated_data["co_instituicao"]
-    ))
-    if cursor.rowcount == 0:
-        conn.close()
+        """,
+        (
+            validated_data["no_instituicao"],
+            validated_data["id_municipio"],
+            validated_data["id_estado"],
+            validated_data["id_mesorregiao"],
+            validated_data["id_microrregiao"],
+            validated_data["dependencia_administrativa"],
+            validated_data["co_instituicao"]
+        )
+    )
+    if rowcount == 0:
         raise HTTPException(status_code=404, detail="Instituição não encontrada")
-    conn.commit()
-    conn.close()
     return {"mensagem": "Instituição atualizada com sucesso"}
 
 @app.delete("/instituicoesensino/{co_instituicao}")
 def remover_instituicao(co_instituicao: int):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM instituicoes WHERE co_instituicao = ?", (co_instituicao,))
-    if cursor.rowcount == 0:
-        conn.close()
+    rowcount = execute_query(
+        "DELETE FROM instituicoes WHERE co_instituicao = ?",
+        (co_instituicao,)
+    )
+    if rowcount == 0:
         raise HTTPException(status_code=404, detail="Instituição não encontrada")
-    conn.commit()
-    conn.close()
     return {"mensagem": "Instituição removida com sucesso"}
 
 @app.get("/estados/nordeste")
 def listar_estados_nordeste():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id_estado, sigla, nome FROM estados")
-    estados = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return estados
+    results = execute_query(
+        "SELECT id_estado, sigla, nome FROM estados",
+        fetch_all=True
+    )
+    return [dict(row) for row in results]
 
 @app.get("/municipios/nordeste")
 def listar_municipios_nordeste(id_estado: int = None):
-    conn = get_connection()
-    cursor = conn.cursor()
+    query = "SELECT id_municipio, nome, id_estado FROM municipios"
+    params = ()
     if id_estado:
-        cursor.execute("SELECT id_municipio, nome, id_estado FROM municipios WHERE id_estado = ?", (id_estado,))
-    else:
-        cursor.execute("SELECT id_municipio, nome, id_estado FROM municipios")
-    municipios = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return municipios
+        query += " WHERE id_estado = ?"
+        params = (id_estado,)
+    results = execute_query(query, params, fetch_all=True)
+    return [dict(row) for row in results]
 
 @app.get("/mesorregioes/nordeste")
 def listar_mesorregioes_nordeste(id_estado: int = None):
-    conn = get_connection()
-    cursor = conn.cursor()
+    query = "SELECT id_mesorregiao, nome, id_estado FROM mesorregioes"
+    params = ()
     if id_estado:
-        cursor.execute("SELECT id_mesorregiao, nome, id_estado FROM mesorregioes WHERE id_estado = ?", (id_estado,))
-    else:
-        cursor.execute("SELECT id_mesorregiao, nome, id_estado FROM mesorregioes")
-    mesorregioes = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return mesorregioes
+        query += " WHERE id_estado = ?"
+        params = (id_estado,)
+    results = execute_query(query, params, fetch_all=True)
+    return [dict(row) for row in results]
 
 @app.get("/microrregioes/nordeste")
 def listar_microrregioes_nordeste(id_mesorregiao: int = None):
-    conn = get_connection()
-    cursor = conn.cursor()
+    query = "SELECT id_microrregiao, nome, id_mesorregiao FROM microrregioes"
+    params = ()
     if id_mesorregiao:
-        cursor.execute("SELECT id_microrregiao, nome, id_mesorregiao FROM microrregioes WHERE id_mesorregiao = ?", (id_mesorregiao,))
-    else:
-        cursor.execute("SELECT id_microrregiao, nome, id_mesorregiao FROM microrregioes")
-    microrregioes = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return microrregioes
+        query += " WHERE id_mesorregiao = ?"
+        params = (id_mesorregiao,)
+    results = execute_query(query, params, fetch_all=True)
+    return [dict(row) for row in results]
